@@ -830,7 +830,7 @@ function drawTitle(){
   ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
   for(let i=0;i<70;i++){
     const sx=(Math.sin(i*137.5)*.5+.5)*W,sy=(Math.cos(i*89.3)*.5+.5)*H;
-    const sz=.5+Math.sin(t*2+i)*.8;
+    const sz=Math.max(0.1,.5+Math.sin(t*2+i)*.8);
     ctx.fillStyle=`rgba(255,255,255,${.25+Math.sin(t*3+i)*.25})`;
     ctx.beginPath();ctx.arc(sx,sy,sz,0,Math.PI*2);ctx.fill();
   }
