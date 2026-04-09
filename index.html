@@ -60,14 +60,26 @@ canvas.addEventListener('touchstart',e=>{
   e.preventDefault();
   if(state===S.TITLE){
     const p0=getCanvasPos(e.changedTouches[0]);
-    if(p0.y>458&&p0.y<518){
+    if(p0.y>455&&p0.y<512){
       initAudio();
-      if(p0.x<W/2){resetGame();controlMode='keyboard';state=S.PLAYING;}
-      else{resetGame();controlMode='mobile';state=S.PLAYING;}
+      if(p0.x<W/2-145){resetGame();controlMode='keyboard';state=S.PLAYING;}
+      else if(p0.x<W/2+145){resetGame();controlMode='mobile';state=S.PLAYING;}
+      else{resetRunner();controlMode='runner';state=S.RUNNER;}
     }
     return;
   }
   if(state===S.VICTORY||state===S.GAMEOVER){state=S.TITLE;return;}
+  // Runner touch controls
+  if(state===S.RUNNER||state===S.RUNNER_BOSS){
+    for(let i=0;i<e.changedTouches.length;i++){
+      const tc=e.changedTouches[i],pos=getCanvasPos(tc);
+      if(Math.hypot(pos.x-80,pos.y-(H-78))<64){rTouch.left=true;}
+      else if(Math.hypot(pos.x-190,pos.y-(H-78))<64){rTouch.right=true;}
+      else if(Math.hypot(pos.x-PUNCH_BTN_X,pos.y-PUNCH_BTN_Y)<PUNCH_BTN_R+20){rTouch.punch=true;}
+    }
+    return;
+  }
+  // Top-down touch controls
   for(let i=0;i<e.changedTouches.length;i++){
     const tc=e.changedTouches[i],pos=getCanvasPos(tc);
     if(touch.joystick.id===-1&&Math.hypot(pos.x-JOY_X,pos.y-JOY_Y)<JOY_R+30){
@@ -100,12 +112,14 @@ canvas.addEventListener('touchcancel',()=>{
 },{passive:false});
 
 // ── STATE ──────────────────────────────────────────────────────────────────
-const S={TITLE:0,PLAYING:1,BOSS_INTRO:2,BOSS:3,VICTORY:4,GAMEOVER:5};
+const S={TITLE:0,PLAYING:1,BOSS_INTRO:2,BOSS:3,VICTORY:4,GAMEOVER:5,
+         RUNNER:6,RUNNER_BOSS_INTRO:7,RUNNER_BOSS:8};
 let state=S.TITLE,introTimer=0;
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────
 const CEREAL_TOTAL=15,BOSS_MAX_HP=10;
 const CEREAL_COLORS=['#FF6B35','#FFD700','#FF1493','#00CED1','#32CD32','#FF69B4','#9370DB','#FF4500','#00FA9A','#FF8C00'];
+const RUNNER_LANES=[195,450,705]; // x-centers of left/mid/right lanes
 
 // ── ENTITY STORAGE ─────────────────────────────────────────────────────────
 let player,cereals,hungers,boss,lasers,particles,bgPatches;
@@ -148,6 +162,277 @@ function makeHunger(fromBoss=false){
     wobble:Math.random()*Math.PI*2,eyeP:Math.random()*Math.PI*2,
     stunned:false,stunTimer:0,flying:false,flyVx:0,flyVy:0,
     dying:false,dyingTimer:0};
+}
+
+// ── RUNNER STATE ───────────────────────────────────────────────────────────
+let rp,rCereals,rHungers,rLasers,rBoss; // runner entities
+let rScroll=0,rSpeed=0,rDiff=0,rSpawnT=0;
+let rLane=1,rPunchTimer=0,rPunchCool=0,rPunching=false;
+let rInv=false,rInvT=0,rHP=3,rCerealCount=0,rBossIntroT=0;
+const rTouch={left:false,right:false,punch:false};
+
+function resetRunner(){
+  rp={x:RUNNER_LANES[1],y:H-130,angle:-Math.PI/2,trail:[]};
+  rCereals=[];rHungers=[];rLasers=[];rBoss=null;
+  particles=[];
+  rScroll=0;rSpeed=2.5;rDiff=0;rSpawnT=0;
+  rLane=1;rPunchTimer=0;rPunchCool=0;rPunching=false;
+  rInv=false;rInvT=0;rHP=3;rCerealCount=0;
+}
+
+function spawnRunnerItem(){
+  const lane=Math.floor(Math.random()*3);
+  const x=RUNNER_LANES[lane];
+  const activeCer=rCereals.filter(c=>!c.collected).length;
+  const spawnCer=rCerealCount<CEREAL_TOTAL&&activeCer<4&&
+                 (rHungers.length===0||Math.random()<0.52);
+  if(spawnCer){
+    rCereals.push({x,y:-55,lane,
+      color:CEREAL_COLORS[Math.floor(Math.random()*CEREAL_COLORS.length)],
+      rot:Math.random()*Math.PI*2,pulse:Math.random()*Math.PI*2,collected:false});
+  }else if(rHungers.length<(3+Math.floor(rDiff/800))){
+    rHungers.push({x,y:-90,lane,wobble:Math.random()*Math.PI*2,eyeP:Math.random()*Math.PI*2,
+      stunned:false,stunTimer:0,flying:false,flyVx:0,flyVy:0,dying:false,
+      ownSpeed:0.4+Math.random()*0.9});
+  }
+}
+
+function checkRunnerPunch(){
+  rHungers.forEach(h=>{
+    if(h.dying||h.flying||h.stunned)return;
+    if(Math.abs(h.x-rp.x)<60&&h.y>rp.y-110&&h.y<rp.y+30){
+      if(state===S.RUNNER_BOSS&&rBoss){
+        h.flying=true;
+        const dx=rBoss.x-h.x,dy=rBoss.y-h.y,d=Math.hypot(dx,dy)||1;
+        h.flyVx=dx/d*11;h.flyVy=dy/d*11;
+      }else{
+        h.stunned=true;h.stunTimer=90;
+      }
+      sfx.punch();spawnParticles(h.x,h.y,'#FFD700',8);
+    }
+  });
+}
+
+function updateRunnerCommon(){
+  // Lane switching
+  if((jp['ArrowLeft']||jp['KeyA'])&&rLane>0)rLane--;
+  if((jp['ArrowRight']||jp['KeyD'])&&rLane<2)rLane++;
+  if(rTouch.left){rTouch.left=false;if(rLane>0)rLane--;}
+  if(rTouch.right){rTouch.right=false;if(rLane<2)rLane++;}
+  rp.x+=(RUNNER_LANES[rLane]-rp.x)*0.2;
+  rp.trail.push({x:rp.x,y:rp.y});
+  if(rp.trail.length>10)rp.trail.shift();
+  // Punch
+  if(rPunchCool>0)rPunchCool--;
+  if((jp['Space']||jp['KeyZ']||jp['KeyX']||rTouch.punch)&&!rPunching&&rPunchCool===0){
+    rPunching=true;rPunchTimer=18;rPunchCool=28;checkRunnerPunch();
+  }
+  rTouch.punch=false;
+  if(rPunchTimer>0&&--rPunchTimer===0)rPunching=false;
+  rp.punching=rPunching;rp.punchTimer=rPunchTimer;
+  rp.invincible=rInv;rp.iTimer=rInvT;rp.angle=-Math.PI/2;
+  if(rInv&&--rInvT<=0)rInv=false;
+  updateParticles();
+}
+
+function updateRunnerHungers(speed){
+  rHungers.forEach(h=>{
+    h.wobble+=0.1;h.eyeP+=0.07;
+    if(h.flying){h.x+=h.flyVx;h.y+=h.flyVy;return;}
+    if(h.stunned){h.stunTimer--;if(h.stunTimer<=0)h.stunned=false;h.y+=speed*0.2;return;}
+    h.y+=speed+(h.ownSpeed||0);
+    if(!rInv&&Math.abs(h.x-rp.x)<38&&Math.abs(h.y-rp.y)<38){
+      rHP--;rInv=true;rInvT=90;
+      sfx.hit();spawnParticles(rp.x,rp.y,'#FF0000',8);
+      if(rHP<=0)state=S.GAMEOVER;
+    }
+  });
+  rHungers=rHungers.filter(h=>!h.dying&&h.y<H+80&&!(h.flying&&(h.y<-120||h.y>H+80)));
+}
+
+function updateRunner(){
+  updateRunnerCommon();
+  rSpeed=2.5+rDiff*0.00035;rDiff++;rScroll+=rSpeed;
+  rSpawnT++;
+  if(rSpawnT>=Math.max(42,82-rDiff*0.045)){rSpawnT=0;spawnRunnerItem();}
+  // Cereals scroll down
+  rCereals.forEach(c=>{if(!c.collected){c.y+=rSpeed;c.rot+=0.05;c.pulse+=0.08;}});
+  // Collect
+  rCereals.forEach(c=>{
+    if(!c.collected&&Math.abs(c.x-rp.x)<36&&Math.abs(c.y-rp.y)<36){
+      c.collected=true;rCerealCount++;sfx.collect();spawnParticles(c.x,c.y,c.color,8);
+      if(rCerealCount>=CEREAL_TOTAL){
+        state=S.RUNNER_BOSS_INTRO;rBossIntroT=120;
+        rHungers=[];rCereals=[];rLasers=[];
+      }
+    }
+  });
+  updateRunnerHungers(rSpeed);
+  rCereals=rCereals.filter(c=>c.y<H+80);
+}
+
+function updateRunnerBoss(){
+  const b=rBoss;
+  b.wobble+=0.05;if(b.hitFlash>0)b.hitFlash--;
+  b.moveCool--;
+  if(b.moveCool<=0){b.targetLane=Math.floor(Math.random()*3);b.moveCool=55+Math.random()*55;}
+  b.x+=(RUNNER_LANES[b.targetLane]-b.x)*0.04;
+  rScroll+=1.5;
+  // Fire lasers
+  b.laserTimer--;
+  if(b.laserTimer<=0){
+    const ln=Math.floor(Math.random()*3);
+    rLasers.push({lane:ln,warning:true,warningTimer:48,active:false,activeTimer:0,dying:false});
+    b.laserTimer=b.phase===2?68:108;
+    if(b.phase===2){
+      const ln2=(ln+1+Math.floor(Math.random()*2))%3;
+      rLasers.push({lane:ln2,warning:true,warningTimer:48,active:false,activeTimer:0,dying:false});
+    }
+  }
+  // Spawn hungers from boss
+  b.spawnTimer++;
+  if(b.spawnTimer>=(b.phase===2?78:118)){
+    b.spawnTimer=0;
+    const ln=Math.floor(Math.random()*3);
+    rHungers.push({x:RUNNER_LANES[ln],y:b.y+85,lane:ln,wobble:0,eyeP:0,
+      stunned:false,stunTimer:0,flying:false,flyVx:0,flyVy:0,dying:false,ownSpeed:1.4});
+  }
+  // Update lasers
+  rLasers.forEach(l=>{
+    if(l.warning){l.warningTimer--;if(l.warningTimer<=0){l.warning=false;l.active=true;l.activeTimer=28;}}
+    else if(l.active){
+      l.activeTimer--;if(l.activeTimer<=0){l.active=false;l.dying=true;}
+      if(!rInv&&Math.abs(RUNNER_LANES[l.lane]-rp.x)<42){
+        rHP--;rInv=true;rInvT=90;sfx.hit();spawnParticles(rp.x,rp.y,'#FF0000',8);
+        if(rHP<=0)state=S.GAMEOVER;
+      }
+    }
+  });
+  rLasers=rLasers.filter(l=>!l.dying);
+  // Flying hungers hit boss
+  rHungers.forEach(h=>{
+    if(h.flying&&Math.hypot(h.x-b.x,h.y-b.y)<80){
+      h.dying=true;b.hp--;b.hitFlash=14;
+      sfx.bossHit();spawnParticles(h.x,h.y,'#FFD700',14);
+      if(b.hp<=0){sfx.victory();state=S.VICTORY;}
+    }
+  });
+  if(b.hp<=5)b.phase=2;
+  updateRunnerCommon();
+  updateRunnerHungers(1.5);
+}
+
+// ── RUNNER DRAW ─────────────────────────────────────────────────────────────
+function drawRunnerBg(){
+  const t=Date.now()/1000;
+  const bg=ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#080018');bg.addColorStop(1,'#180030');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+  // Stars scrolling
+  for(let i=0;i<45;i++){
+    const sx=(Math.sin(i*137.5)*.5+.5)*W;
+    const sy=((Math.cos(i*89.3)*.5+.5)*H+rScroll*.3)%H;
+    const sz=Math.max(0.1,.4+Math.sin(t*2+i)*.4);
+    ctx.fillStyle=`rgba(255,255,255,${.15+Math.sin(t*3+i)*.12})`;
+    ctx.beginPath();ctx.arc(sx,sy,sz,0,Math.PI*2);ctx.fill();
+  }
+  // Motion streaks
+  for(let i=0;i<10;i++){
+    const sx=80+Math.sin(i*73.1)*750;
+    const sy=(rScroll*1.8+i*95)%H;
+    const len=15+Math.sin(i*53)*12;
+    ctx.strokeStyle=`rgba(160,100,255,${.05+Math.sin(i)*.03})`;
+    ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-len);ctx.stroke();
+  }
+  // Lane dividers (scrolling dashes)
+  const divs=[(RUNNER_LANES[0]+RUNNER_LANES[1])/2,(RUNNER_LANES[1]+RUNNER_LANES[2])/2];
+  ctx.strokeStyle='rgba(180,100,255,0.22)';ctx.lineWidth=2;
+  const dashOff=(rScroll*.9)%36;
+  ctx.setLineDash([18,18]);ctx.lineDashOffset=-dashOff;
+  divs.forEach(dx=>{ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,H);ctx.stroke();});
+  ctx.setLineDash([]);ctx.lineDashOffset=0;
+  // Side gutters
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.fillRect(0,0,55,H);ctx.fillRect(W-55,0,55,H);
+  // Lane floor tints
+  ctx.fillStyle='rgba(80,0,180,0.05)';ctx.fillRect(55,0,divs[0]-55,H);
+  ctx.fillStyle='rgba(180,0,80,0.05)';ctx.fillRect(divs[1],0,W-55-divs[1],H);
+}
+
+function drawRunnerLasers(){
+  rLasers.forEach(l=>{
+    const lx=RUNNER_LANES[l.lane];
+    if(l.warning){
+      ctx.strokeStyle=`rgba(255,140,0,${.5+Math.sin(Date.now()*.07)*.3})`;
+      ctx.lineWidth=5;ctx.setLineDash([14,9]);
+      ctx.beginPath();ctx.moveTo(lx,rBoss?rBoss.y+60:0);ctx.lineTo(lx,H);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle='rgba(255,160,0,0.9)';ctx.font='bold 13px Arial';ctx.textAlign='center';
+      ctx.fillText('LASER!',lx,rBoss?rBoss.y+55:40);
+    }else if(l.active){
+      ctx.strokeStyle='rgba(255,0,0,0.2)';ctx.lineWidth=36;
+      ctx.beginPath();ctx.moveTo(lx,0);ctx.lineTo(lx,H);ctx.stroke();
+      ctx.strokeStyle='rgba(255,60,0,0.55)';ctx.lineWidth=14;
+      ctx.beginPath();ctx.moveTo(lx,0);ctx.lineTo(lx,H);ctx.stroke();
+      ctx.strokeStyle='#FF3300';ctx.lineWidth=4;
+      ctx.beginPath();ctx.moveTo(lx,0);ctx.lineTo(lx,H);ctx.stroke();
+      ctx.strokeStyle='#FFF';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(lx,0);ctx.lineTo(lx,H);ctx.stroke();
+    }
+  });
+}
+
+function drawRunnerHUD(){
+  ctx.textAlign='left';
+  // Hearts
+  for(let i=0;i<3;i++){
+    ctx.font='22px Arial';ctx.globalAlpha=i<rHP?1:0.25;
+    ctx.fillStyle='#FF3355';ctx.fillText('♥',14+i*28,26);
+  }
+  ctx.globalAlpha=1;
+  // Cereal counter
+  ctx.fillStyle='#FFD700';ctx.font='bold 16px Arial';ctx.textAlign='center';
+  ctx.fillText(`Cereals: ${rCerealCount} / ${CEREAL_TOTAL}`,W/2,24);
+  ctx.fillStyle='rgba(255,255,255,0.45)';ctx.font='11px Arial';ctx.textAlign='right';
+  ctx.fillText(`spd ${rSpeed.toFixed(1)}`,W-58,24);
+  // Boss HP bar
+  if(state===S.RUNNER_BOSS&&rBoss){
+    const bw=260,bx=W/2-130,by=36;
+    ctx.fillStyle='rgba(0,0,0,0.55)';rrect(bx-4,by-4,bw+8,20,10);ctx.fill();
+    const f=Math.max(0,rBoss.hp/BOSS_MAX_HP);
+    ctx.fillStyle=`hsl(${f*120},100%,50%)`;rrect(bx,by,bw*f,12,6);ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.45)';ctx.lineWidth=1.5;rrect(bx,by,bw,12,6);ctx.stroke();
+    ctx.fillStyle='#FFF';ctx.font='bold 11px Arial';ctx.textAlign='center';
+    ctx.fillText(`BOSS  ${rBoss.hp} / ${BOSS_MAX_HP}`,W/2,by+10);
+  }
+}
+
+function drawRunnerTouchControls(){
+  const LAX=80,RAX=190,BTN_Y=H-78,BR=44;
+  ctx.save();
+  // Left arrow
+  ctx.globalAlpha=0.65;
+  ctx.fillStyle='rgba(60,100,255,0.38)';
+  ctx.beginPath();ctx.arc(LAX,BTN_Y,BR,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(120,160,255,0.8)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(LAX,BTN_Y,BR,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#FFF';ctx.font='bold 26px Arial';ctx.textAlign='center';
+  ctx.fillText('\u25C0',LAX,BTN_Y+10);
+  // Right arrow
+  ctx.fillStyle='rgba(60,100,255,0.38)';
+  ctx.beginPath();ctx.arc(RAX,BTN_Y,BR,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(120,160,255,0.8)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(RAX,BTN_Y,BR,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#FFF';ctx.font='bold 26px Arial';ctx.textAlign='center';
+  ctx.fillText('\u25B6',RAX,BTN_Y+10);
+  // Punch
+  ctx.globalAlpha=0.68;
+  ctx.fillStyle='rgba(255,90,0,0.42)';
+  ctx.beginPath();ctx.arc(PUNCH_BTN_X,PUNCH_BTN_Y,PUNCH_BTN_R,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(255,150,50,0.9)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(PUNCH_BTN_X,PUNCH_BTN_Y,PUNCH_BTN_R,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#FFF';ctx.font='bold 17px Arial';ctx.fillText('PUNCH',PUNCH_BTN_X,PUNCH_BTN_Y+6);
+  ctx.globalAlpha=1;ctx.restore();
 }
 
 // ── UPDATE ─────────────────────────────────────────────────────────────────
@@ -929,27 +1214,26 @@ function drawTitle(){
   ctx.fillStyle='#EEE';ctx.font='14.5px Arial';
   lines.forEach((l,i)=>ctx.fillText(l,W/2,284+i*26));
   const pulse=1+Math.sin(t*3)*.04;
-  // Computer mode button (left)
-  ctx.save();ctx.translate(W/2-160,488);ctx.scale(pulse,pulse);
-  ctx.fillStyle='#1155BB';ctx.shadowColor='#4499FF';ctx.shadowBlur=22;
-  rrect(-130,-30,260,60,30);ctx.fill();ctx.shadowBlur=0;
-  ctx.strokeStyle='rgba(120,190,255,0.7)';ctx.lineWidth=2;rrect(-130,-30,260,60,30);ctx.stroke();
+  // Button helper
+  function modeBtn(cx,cy,w,h,r,bg,glow,stroke,label,sub){
+    ctx.save();ctx.translate(cx,cy);ctx.scale(pulse,pulse);
+    ctx.fillStyle=bg;ctx.shadowColor=glow;ctx.shadowBlur=22;
+    rrect(-w/2,-h/2,w,h,r);ctx.fill();ctx.shadowBlur=0;
+    ctx.strokeStyle=stroke;ctx.lineWidth=2;rrect(-w/2,-h/2,w,h,r);ctx.stroke();
+    ctx.textAlign='center';
+    ctx.fillStyle='#FFF';ctx.font='bold 15px Arial';ctx.fillText(label,0,0);
+    ctx.fillStyle='rgba(255,255,255,0.72)';ctx.font='11px Arial';ctx.fillText(sub,0,16);
+    ctx.restore();
+  }
+  modeBtn(W/2-290,482,210,56,28,'#1155BB','#4499FF','rgba(120,190,255,0.7)',
+          'COMPUTER MODE','WASD + SPACE');
+  modeBtn(W/2,482,210,56,28,'#BB4400','#FF8800','rgba(255,190,100,0.7)',
+          'MOBILE MODE','Touch Joystick');
+  modeBtn(W/2+290,482,210,56,28,'#226622','#44FF44','rgba(100,220,100,0.7)',
+          'RUNNER MODE','3-Lane Runner');
   ctx.textAlign='center';
-  ctx.fillStyle='#FFF';ctx.font='bold 17px Arial';ctx.fillText('COMPUTER MODE',0,0);
-  ctx.fillStyle='rgba(200,230,255,0.85)';ctx.font='12px Arial';ctx.fillText('WASD / Arrows + SPACE',0,18);
-  ctx.restore();
-  // Mobile mode button (right)
-  ctx.save();ctx.translate(W/2+160,488);ctx.scale(pulse,pulse);
-  ctx.fillStyle='#BB4400';ctx.shadowColor='#FF8800';ctx.shadowBlur=22;
-  rrect(-130,-30,260,60,30);ctx.fill();ctx.shadowBlur=0;
-  ctx.strokeStyle='rgba(255,190,100,0.7)';ctx.lineWidth=2;rrect(-130,-30,260,60,30);ctx.stroke();
-  ctx.textAlign='center';
-  ctx.fillStyle='#FFF';ctx.font='bold 17px Arial';ctx.fillText('MOBILE MODE',0,0);
-  ctx.fillStyle='rgba(255,230,200,0.85)';ctx.font='12px Arial';ctx.fillText('Touch Joystick + Tap Punch',0,18);
-  ctx.restore();
-  ctx.textAlign='center';
-  ctx.fillStyle='rgba(255,255,255,0.32)';ctx.font='13px Arial';
-  ctx.fillText('Desktop: click COMPUTER or press SPACE  |  Mobile: tap MOBILE MODE',W/2,540);
+  ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='12px Arial';
+  ctx.fillText('COMPUTER / MOBILE: top-down free-fly  |  RUNNER: lane-based endless runner',W/2,542);
 }
 
 // ── TOUCH CONTROLS OVERLAY ─────────────────────────────────────────────────
@@ -1123,6 +1407,31 @@ function loop(){
       drawParticles();drawLasers();hungers.forEach(drawHunger);drawBoss();drawPlayer();drawHUD();
       drawTouchControls();
       break;
+    // ── RUNNER STATES ────────────────────────────────────────────────────────
+    case S.RUNNER:{
+      drawRunnerBg();updateRunner();
+      rCereals.forEach(c=>{if(!c.collected)drawCereal(c);});
+      drawParticles();rHungers.forEach(drawHunger);
+      const _sp=player;player=rp;drawPlayer();player=_sp;
+      drawRunnerHUD();drawRunnerTouchControls();
+      break;}
+    case S.RUNNER_BOSS_INTRO:
+      drawRunnerBg();updateParticles();drawParticles();
+      introTimer=rBossIntroT;drawBossIntro();
+      if(--rBossIntroT<=0){
+        state=S.RUNNER_BOSS;
+        rBoss={x:RUNNER_LANES[1],y:95,targetLane:1,hp:BOSS_MAX_HP,phase:1,
+          laserTimer:105,spawnTimer:0,hitFlash:0,wobble:0,moveCool:80};
+      }
+      break;
+    case S.RUNNER_BOSS:{
+      drawRunnerBg();updateRunnerBoss();
+      drawRunnerLasers();drawParticles();
+      rHungers.forEach(drawHunger);
+      const _sb=boss;boss=rBoss;drawBoss();boss=_sb;
+      const _sp2=player;player=rp;drawPlayer();player=_sp2;
+      drawRunnerHUD();drawRunnerTouchControls();
+      break;}
     case S.VICTORY:
       updateParticles();drawParticles();drawVictory();
       if(jp['Space']||jp['Enter'])state=S.TITLE;
@@ -1142,10 +1451,10 @@ document.addEventListener('click',e=>{
   if(state===S.TITLE){
     const r=canvas.getBoundingClientRect();
     const cx=(e.clientX-r.left)*(W/r.width),cy=(e.clientY-r.top)*(H/r.height);
-    if(cy>458&&cy<518){
-      resetGame();
-      controlMode=cx<W/2?'keyboard':'mobile';
-      state=S.PLAYING;
+    if(cy>455&&cy<512){
+      if(cx<W/2-145){resetGame();controlMode='keyboard';state=S.PLAYING;}
+      else if(cx<W/2+145){resetGame();controlMode='mobile';state=S.PLAYING;}
+      else{resetRunner();controlMode='runner';state=S.RUNNER;}
     }
   }
 });
