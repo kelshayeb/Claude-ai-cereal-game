@@ -69,13 +69,15 @@ canvas.addEventListener('touchstart',e=>{
     return;
   }
   if(state===S.VICTORY||state===S.GAMEOVER){state=S.TITLE;return;}
-  // Runner touch controls
+  // Runner touch — swipe anywhere for lanes, punch button for punch
   if(state===S.RUNNER||state===S.RUNNER_BOSS){
     for(let i=0;i<e.changedTouches.length;i++){
       const tc=e.changedTouches[i],pos=getCanvasPos(tc);
-      if(Math.hypot(pos.x-80,pos.y-(H-78))<64){rTouch.left=true;}
-      else if(Math.hypot(pos.x-190,pos.y-(H-78))<64){rTouch.right=true;}
-      else if(Math.hypot(pos.x-PUNCH_BTN_X,pos.y-PUNCH_BTN_Y)<PUNCH_BTN_R+20){rTouch.punch=true;}
+      if(Math.hypot(pos.x-PUNCH_BTN_X,pos.y-PUNCH_BTN_Y)<PUNCH_BTN_R+22){
+        rTouchPunch=true;
+      } else {
+        rSwipe[tc.identifier]={startX:pos.x,startY:pos.y};
+      }
     }
     return;
   }
@@ -102,6 +104,18 @@ canvas.addEventListener('touchend',e=>{
   e.preventDefault();
   for(let i=0;i<e.changedTouches.length;i++){
     const tc=e.changedTouches[i];
+    // Runner: evaluate swipe direction
+    if(rSwipe[tc.identifier]){
+      const pos=getCanvasPos(tc);
+      const dx=pos.x-rSwipe[tc.identifier].startX;
+      const dy=pos.y-rSwipe[tc.identifier].startY;
+      if(Math.abs(dx)>38&&Math.abs(dx)>Math.abs(dy)*1.2){
+        if(dx<0)rTouchLeft=true; else rTouchRight=true;
+      }
+      delete rSwipe[tc.identifier];
+      continue;
+    }
+    // Top-down joystick/punch
     if(tc.identifier===touch.joystick.id){touch.joystick.active=false;touch.joystick.id=-1;}
     else if(tc.identifier===touch.punch.id){touch.punch.active=false;touch.punch.id=-1;}
   }
@@ -109,6 +123,7 @@ canvas.addEventListener('touchend',e=>{
 canvas.addEventListener('touchcancel',()=>{
   touch.joystick.active=false;touch.joystick.id=-1;
   touch.punch.active=false;touch.punch.id=-1;
+  for(const id in rSwipe)delete rSwipe[id];
 },{passive:false});
 
 // ── STATE ──────────────────────────────────────────────────────────────────
@@ -169,7 +184,8 @@ let rp,rCereals,rHungers,rLasers,rBoss; // runner entities
 let rScroll=0,rSpeed=0,rDiff=0,rSpawnT=0;
 let rLane=1,rPunchTimer=0,rPunchCool=0,rPunching=false;
 let rInv=false,rInvT=0,rHP=3,rCerealCount=0,rBossIntroT=0;
-const rTouch={left:false,right:false,punch:false};
+const rSwipe={}; // tracks active runner swipe touches: id -> {startX,startY}
+let rTouchLeft=false,rTouchRight=false,rTouchPunch=false;
 
 function resetRunner(){
   rp={x:RUNNER_LANES[1],y:H-130,angle:-Math.PI/2,trail:[]};
@@ -217,17 +233,17 @@ function updateRunnerCommon(){
   // Lane switching
   if((jp['ArrowLeft']||jp['KeyA'])&&rLane>0)rLane--;
   if((jp['ArrowRight']||jp['KeyD'])&&rLane<2)rLane++;
-  if(rTouch.left){rTouch.left=false;if(rLane>0)rLane--;}
-  if(rTouch.right){rTouch.right=false;if(rLane<2)rLane++;}
+  if(rTouchLeft){rTouchLeft=false;if(rLane>0)rLane--;}
+  if(rTouchRight){rTouchRight=false;if(rLane<2)rLane++;}
   rp.x+=(RUNNER_LANES[rLane]-rp.x)*0.2;
   rp.trail.push({x:rp.x,y:rp.y});
   if(rp.trail.length>10)rp.trail.shift();
   // Punch
   if(rPunchCool>0)rPunchCool--;
-  if((jp['Space']||jp['KeyZ']||jp['KeyX']||rTouch.punch)&&!rPunching&&rPunchCool===0){
+  if((jp['Space']||jp['KeyZ']||jp['KeyX']||rTouchPunch)&&!rPunching&&rPunchCool===0){
     rPunching=true;rPunchTimer=18;rPunchCool=28;checkRunnerPunch();
   }
-  rTouch.punch=false;
+  rTouchPunch=false;
   if(rPunchTimer>0&&--rPunchTimer===0)rPunching=false;
   rp.punching=rPunching;rp.punchTimer=rPunchTimer;
   rp.invincible=rInv;rp.iTimer=rInvT;rp.angle=-Math.PI/2;
@@ -408,31 +424,32 @@ function drawRunnerHUD(){
 }
 
 function drawRunnerTouchControls(){
-  const LAX=80,RAX=190,BTN_Y=H-78,BR=44;
   ctx.save();
-  // Left arrow
-  ctx.globalAlpha=0.65;
-  ctx.fillStyle='rgba(60,100,255,0.38)';
-  ctx.beginPath();ctx.arc(LAX,BTN_Y,BR,0,Math.PI*2);ctx.fill();
-  ctx.strokeStyle='rgba(120,160,255,0.8)';ctx.lineWidth=2;
-  ctx.beginPath();ctx.arc(LAX,BTN_Y,BR,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='#FFF';ctx.font='bold 26px Arial';ctx.textAlign='center';
-  ctx.fillText('\u25C0',LAX,BTN_Y+10);
-  // Right arrow
-  ctx.fillStyle='rgba(60,100,255,0.38)';
-  ctx.beginPath();ctx.arc(RAX,BTN_Y,BR,0,Math.PI*2);ctx.fill();
-  ctx.strokeStyle='rgba(120,160,255,0.8)';ctx.lineWidth=2;
-  ctx.beginPath();ctx.arc(RAX,BTN_Y,BR,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='#FFF';ctx.font='bold 26px Arial';ctx.textAlign='center';
-  ctx.fillText('\u25B6',RAX,BTN_Y+10);
-  // Punch
-  ctx.globalAlpha=0.68;
-  ctx.fillStyle='rgba(255,90,0,0.42)';
+  // Swipe hint — left side of screen
+  const t=Date.now()/1000;
+  const alpha=0.18+Math.sin(t*1.8)*0.08;
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle='rgba(255,255,255,0.7)';ctx.font='13px Arial';ctx.textAlign='center';
+  // Left swipe arrow
+  ctx.fillText('\u25C4\u25C4 swipe \u25BA\u25BA',W/2-170,H-68);
+  // Animated swipe indicator
+  const sw=(Math.sin(t*2)*0.5+0.5)*60;
+  ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(160-sw,H-52);ctx.lineTo(220-sw,H-52);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(220-sw,H-60);ctx.lineTo(240-sw,H-52);ctx.lineTo(220-sw,H-44);ctx.stroke();
+  ctx.globalAlpha=1;
+  // Punch button
+  ctx.globalAlpha=0.72;
+  const pbg=ctx.createRadialGradient(PUNCH_BTN_X,PUNCH_BTN_Y,0,PUNCH_BTN_X,PUNCH_BTN_Y,PUNCH_BTN_R);
+  pbg.addColorStop(0,'rgba(255,150,30,0.65)');pbg.addColorStop(1,'rgba(200,60,0,0.45)');
+  ctx.fillStyle=pbg;
   ctx.beginPath();ctx.arc(PUNCH_BTN_X,PUNCH_BTN_Y,PUNCH_BTN_R,0,Math.PI*2);ctx.fill();
-  ctx.strokeStyle='rgba(255,150,50,0.9)';ctx.lineWidth=2;
+  ctx.strokeStyle='rgba(255,140,40,0.9)';ctx.lineWidth=2;
   ctx.beginPath();ctx.arc(PUNCH_BTN_X,PUNCH_BTN_Y,PUNCH_BTN_R,0,Math.PI*2);ctx.stroke();
-  ctx.fillStyle='#FFF';ctx.font='bold 17px Arial';ctx.fillText('PUNCH',PUNCH_BTN_X,PUNCH_BTN_Y+6);
-  ctx.globalAlpha=1;ctx.restore();
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#FFF';ctx.font='bold 17px Arial';ctx.textAlign='center';
+  ctx.fillText('PUNCH',PUNCH_BTN_X,PUNCH_BTN_Y+6);
+  ctx.restore();
 }
 
 // ── UPDATE ─────────────────────────────────────────────────────────────────
