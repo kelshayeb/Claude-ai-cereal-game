@@ -132,7 +132,7 @@ const S={TITLE:0,PLAYING:1,BOSS_INTRO:2,BOSS:3,VICTORY:4,GAMEOVER:5,
 let state=S.TITLE,introTimer=0;
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────
-const CEREAL_TOTAL=15,BOSS_MAX_HP=10;
+const CEREAL_TOTAL=25,BOSS_MAX_HP=10;
 const CEREAL_COLORS=['#FF6B35','#FFD700','#FF1493','#00CED1','#32CD32','#FF69B4','#9370DB','#FF4500','#00FA9A','#FF8C00'];
 const RUNNER_LANES=[195,450,705]; // x-centers of left/mid/right lanes
 
@@ -520,25 +520,74 @@ function drawPowerup(p){
   if(p.collected)return;
   const sc=1+Math.sin(p.pulse)*0.12;
   ctx.save();ctx.translate(p.x,p.y);ctx.scale(sc,sc);
-  // Glow
-  ctx.shadowColor=PU_COLORS[p.type];ctx.shadowBlur=18;
-  // Rotating ring
-  ctx.strokeStyle=PU_COLORS[p.type];ctx.lineWidth=2.5;
-  ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.stroke();
-  ctx.rotate(p.rot);
-  // Star shape body
-  ctx.fillStyle=PU_COLORS[p.type];
-  ctx.beginPath();
-  for(let i=0;i<8;i++){
-    const a=i*Math.PI/4,r=i%2===0?14:8;
-    i===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+  ctx.shadowColor=PU_COLORS[p.type];ctx.shadowBlur=20;
+
+  if(p.type==='heart'){
+    // Circle background
+    ctx.fillStyle='rgba(255,20,80,0.25)';
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#FF2255';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.stroke();
+    ctx.shadowBlur=0;
+    // Heart shape
+    ctx.fillStyle='#FF2255';
+    ctx.beginPath();
+    ctx.moveTo(0,7);
+    ctx.bezierCurveTo(-12,0,-14,-10,-7,-12);
+    ctx.bezierCurveTo(-3,-13,0,-10,0,-8);
+    ctx.bezierCurveTo(0,-10,3,-13,7,-12);
+    ctx.bezierCurveTo(14,-10,12,0,0,7);
+    ctx.closePath();ctx.fill();
+    // Highlight
+    ctx.fillStyle='rgba(255,180,200,0.7)';
+    ctx.beginPath();ctx.ellipse(-3,-8,2.5,1.5,-0.5,0,Math.PI*2);ctx.fill();
+
+  }else if(p.type==='shield'){
+    // Circle background
+    ctx.fillStyle='rgba(0,200,255,0.2)';
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#00DDFF';ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.stroke();
+    ctx.shadowBlur=0;
+    // Lightning bolt
+    ctx.fillStyle='#FFE000';
+    ctx.strokeStyle='#FF9900';ctx.lineWidth=0.8;
+    ctx.beginPath();
+    ctx.moveTo(3,-12);
+    ctx.lineTo(-3,0);
+    ctx.lineTo(2,0);
+    ctx.lineTo(-3,12);
+    ctx.lineTo(4,1);
+    ctx.lineTo(-1,1);
+    ctx.lineTo(6,-12);
+    ctx.closePath();ctx.fill();ctx.stroke();
+
+  }else if(p.type==='fist'){
+    // Circle background
+    ctx.fillStyle='rgba(255,200,0,0.2)';
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#FFD700';ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.stroke();
+    ctx.shadowBlur=0;
+    // Fist — red glove circle body
+    ctx.fillStyle='#EE0000';
+    ctx.shadowColor='#FF6600';ctx.shadowBlur=6;
+    ctx.beginPath();ctx.arc(2,1,11,0,Math.PI*2);ctx.fill();
+    ctx.shadowBlur=0;
+    // Knuckle divider line
+    ctx.strokeStyle='rgba(255,160,160,0.7)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(-8,1);ctx.lineTo(12,1);ctx.stroke();
+    // Three knuckle bumps at top
+    ctx.fillStyle='#CC0000';
+    [-4,2,8].forEach(bx=>{
+      ctx.beginPath();ctx.arc(bx,-2,2.2,0,Math.PI*2);ctx.fill();
+    });
+    // Thumb stub on left
+    ctx.fillStyle='#EE0000';
+    ctx.beginPath();ctx.ellipse(-10,3,4,3,0.5,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#CC0000';ctx.lineWidth=0.8;ctx.stroke();
   }
-  ctx.closePath();ctx.fill();
-  ctx.shadowBlur=0;
-  // Label
-  ctx.rotate(-p.rot);
-  ctx.fillStyle='#FFF';ctx.font='bold 9px Arial';ctx.textAlign='center';
-  ctx.fillText(PU_LABELS[p.type],0,3);
+
   ctx.restore();
 }
 
@@ -948,16 +997,23 @@ function drawPlayer(){
 
   // ── PUNCH ANIMATION ──
   if(p.punching){
-    const ext=(1-p.punchTimer/18)*32;
+    const isMega=puFistTimer>0;
+    const ext=(1-p.punchTimer/18)*(isMega?44:32);
+    const fistR=isMega?20:12;
     // Extended arm
     ctx.fillStyle='#1a0d88';
     ctx.beginPath();
     ctx.moveTo(14,-5);ctx.lineTo(14+ext*0.6,-5);
     ctx.lineTo(14+ext*0.6,5);ctx.lineTo(14,5);ctx.closePath();ctx.fill();
-    // Fist (red glove, larger)
+    // Fist (red glove — bigger + gold glow when mega)
     ctx.fillStyle='#EE0000';
-    ctx.shadowColor='#FF6600';ctx.shadowBlur=10;
-    ctx.beginPath();ctx.arc(18+ext,0,12,0,Math.PI*2);ctx.fill();
+    ctx.shadowColor=isMega?'#FFD700':'#FF6600';ctx.shadowBlur=isMega?22:10;
+    ctx.beginPath();ctx.arc(18+ext,0,fistR,0,Math.PI*2);ctx.fill();
+    if(isMega){
+      // Gold ring around fist
+      ctx.strokeStyle='#FFD700';ctx.lineWidth=3;
+      ctx.beginPath();ctx.arc(18+ext,0,fistR+4,0,Math.PI*2);ctx.stroke();
+    }
     ctx.shadowBlur=0;
     // Fist knuckle lines
     ctx.strokeStyle='rgba(255,150,150,0.6)';ctx.lineWidth=1.5;
