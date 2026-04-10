@@ -138,6 +138,9 @@ const RUNNER_LANES=[195,450,705]; // x-centers of left/mid/right lanes
 
 // ── ENTITY STORAGE ─────────────────────────────────────────────────────────
 let player,cereals,hungers,boss,lasers,particles,bgPatches;
+let powerups=[]; // shared between modes
+// Power-up active timers (seconds → frames)
+let puInvTimer=0,puFistTimer=0; // invincibility=300f, megafist=480f
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 function resetGame(){
@@ -158,7 +161,7 @@ function resetGame(){
   }
   hungers=[];
   for(let i=0;i<5;i++)hungers.push(makeHunger());
-  boss=null;lasers=[];particles=[];
+  boss=null;lasers=[];particles=[];powerups=[];puInvTimer=0;puFistTimer=0;
   bgPatches=Array.from({length:22},()=>({
     x:Math.random()*W,y:Math.random()*H,
     r:18+Math.random()*55,a:0.03+Math.random()*0.06
@@ -190,7 +193,7 @@ let rTouchLeft=false,rTouchRight=false,rTouchPunch=false;
 function resetRunner(){
   rp={x:RUNNER_LANES[1],y:H-130,angle:-Math.PI/2,trail:[]};
   rCereals=[];rHungers=[];rLasers=[];rBoss=null;
-  particles=[];
+  particles=[];powerups=[];puInvTimer=0;puFistTimer=0;
   rScroll=0;rSpeed=2.5;rDiff=0;rSpawnT=0;
   rLane=1;rPunchTimer=0;rPunchCool=0;rPunching=false;
   rInv=false;rInvT=0;rHP=3;rCerealCount=0;
@@ -214,17 +217,20 @@ function spawnRunnerItem(){
 }
 
 function checkRunnerPunch(){
+  sfx.punch();
   rHungers.forEach(h=>{
     if(h.dying||h.flying||h.stunned)return;
-    if(Math.abs(h.x-rp.x)<60&&h.y>rp.y-110&&h.y<rp.y+30){
+    const rHx=puFistTimer>0?120:70,rHy=puFistTimer>0?200:130;
+    if(puFistTimer>0)spawnParticles(rp.x,rp.y-80,'#FFD700',4);
+    if(Math.abs(h.x-rp.x)<rHx&&h.y>rp.y-rHy&&h.y<rp.y+40){
       if(state===S.RUNNER_BOSS&&rBoss){
-        h.flying=true;
+        h.flying=true;h.stunned=false;
         const dx=rBoss.x-h.x,dy=rBoss.y-h.y,d=Math.hypot(dx,dy)||1;
-        h.flyVx=dx/d*11;h.flyVy=dy/d*11;
+        h.flyVx=dx/d*12;h.flyVy=dy/d*12;
       }else{
         h.stunned=true;h.stunTimer=90;
       }
-      sfx.punch();spawnParticles(h.x,h.y,'#FFD700',8);
+      spawnParticles(h.x,h.y,'#FFD700',8);
     }
   });
 }
@@ -248,6 +254,8 @@ function updateRunnerCommon(){
   rp.punching=rPunching;rp.punchTimer=rPunchTimer;
   rp.invincible=rInv;rp.iTimer=rInvT;rp.angle=-Math.PI/2;
   if(rInv&&--rInvT<=0)rInv=false;
+  if(puInvTimer>0){puInvTimer--;rInv=true;}
+  if(puFistTimer>0)puFistTimer--;
   updateParticles();
 }
 
@@ -263,7 +271,7 @@ function updateRunnerHungers(speed){
       if(rHP<=0)state=S.GAMEOVER;
     }
   });
-  rHungers=rHungers.filter(h=>!h.dying&&h.y<H+80&&!(h.flying&&(h.y<-120||h.y>H+80)));
+  rHungers=rHungers.filter(h=>!h.dying&&h.y<H+80&&!(h.flying&&h.y<-60));
 }
 
 function updateRunner(){
@@ -277,6 +285,8 @@ function updateRunner(){
   rCereals.forEach(c=>{
     if(!c.collected&&Math.abs(c.x-rp.x)<36&&Math.abs(c.y-rp.y)<36){
       c.collected=true;rCerealCount++;sfx.collect();spawnParticles(c.x,c.y,c.color,8);
+      if(Math.random()<0.3)powerups.push({x:c.x,y:c.y,type:['heart','shield','fist'][Math.floor(Math.random()*3)],
+        vx:0,vy:0,rot:Math.random()*Math.PI*2,pulse:0,collected:false});
       if(rCerealCount>=CEREAL_TOTAL){
         state=S.RUNNER_BOSS_INTRO;rBossIntroT=120;
         rHungers=[];rCereals=[];rLasers=[];
@@ -285,57 +295,66 @@ function updateRunner(){
   });
   updateRunnerHungers(rSpeed);
   rCereals=rCereals.filter(c=>c.y<H+80);
+  // Scroll powerups downward and check collection
+  powerups.forEach(p=>{if(!p.collected)p.y+=rSpeed;});
+  updatePowerups(rp.x,rp.y,true);
 }
 
 function updateRunnerBoss(){
   const b=rBoss;
   b.wobble+=0.05;if(b.hitFlash>0)b.hitFlash--;
+  rScroll+=1.5;
+  // Player / punch input first
+  updateRunnerCommon();
+  // Move hungers (so flying positions are current before collision check)
+  updateRunnerHungers(1.5);
+  // Boss movement
   b.moveCool--;
   if(b.moveCool<=0){b.targetLane=Math.floor(Math.random()*3);b.moveCool=55+Math.random()*55;}
   b.x+=(RUNNER_LANES[b.targetLane]-b.x)*0.04;
-  rScroll+=1.5;
   // Fire lasers
   b.laserTimer--;
   if(b.laserTimer<=0){
     const ln=Math.floor(Math.random()*3);
-    rLasers.push({lane:ln,warning:true,warningTimer:48,active:false,activeTimer:0,dying:false});
-    b.laserTimer=b.phase===2?68:108;
+    rLasers.push({lane:ln,warning:true,warningTimer:52,active:false,activeTimer:0,dying:false});
+    b.laserTimer=b.phase===2?72:115;
     if(b.phase===2){
       const ln2=(ln+1+Math.floor(Math.random()*2))%3;
-      rLasers.push({lane:ln2,warning:true,warningTimer:48,active:false,activeTimer:0,dying:false});
+      rLasers.push({lane:ln2,warning:true,warningTimer:52,active:false,activeTimer:0,dying:false});
     }
   }
   // Spawn hungers from boss
   b.spawnTimer++;
-  if(b.spawnTimer>=(b.phase===2?78:118)){
+  if(b.spawnTimer>=(b.phase===2?85:125)){
     b.spawnTimer=0;
     const ln=Math.floor(Math.random()*3);
-    rHungers.push({x:RUNNER_LANES[ln],y:b.y+85,lane:ln,wobble:0,eyeP:0,
-      stunned:false,stunTimer:0,flying:false,flyVx:0,flyVy:0,dying:false,ownSpeed:1.4});
+    rHungers.push({x:RUNNER_LANES[ln],y:b.y+90,lane:ln,wobble:0,eyeP:0,
+      stunned:false,stunTimer:0,flying:false,flyVx:0,flyVy:0,dying:false,ownSpeed:1.5});
   }
   // Update lasers
   rLasers.forEach(l=>{
-    if(l.warning){l.warningTimer--;if(l.warningTimer<=0){l.warning=false;l.active=true;l.activeTimer=28;}}
+    if(l.warning){l.warningTimer--;if(l.warningTimer<=0){l.warning=false;l.active=true;l.activeTimer=30;}}
     else if(l.active){
       l.activeTimer--;if(l.activeTimer<=0){l.active=false;l.dying=true;}
-      if(!rInv&&Math.abs(RUNNER_LANES[l.lane]-rp.x)<42){
+      if(!rInv&&Math.abs(RUNNER_LANES[l.lane]-rp.x)<45){
         rHP--;rInv=true;rInvT=90;sfx.hit();spawnParticles(rp.x,rp.y,'#FF0000',8);
         if(rHP<=0)state=S.GAMEOVER;
       }
     }
   });
   rLasers=rLasers.filter(l=>!l.dying);
-  // Flying hungers hit boss
+  // Check flying hungers hitting boss (after hungers have moved this frame)
   rHungers.forEach(h=>{
-    if(h.flying&&Math.hypot(h.x-b.x,h.y-b.y)<80){
-      h.dying=true;b.hp--;b.hitFlash=14;
-      sfx.bossHit();spawnParticles(h.x,h.y,'#FFD700',14);
+    if(!h.dying&&h.flying&&Math.hypot(h.x-b.x,h.y-b.y)<85){
+      h.dying=true;b.hp--;b.hitFlash=16;
+      sfx.bossHit();spawnParticles(h.x,h.y,'#FFD700',16);
       if(b.hp<=0){sfx.victory();state=S.VICTORY;}
     }
   });
-  if(b.hp<=5)b.phase=2;
-  updateRunnerCommon();
-  updateRunnerHungers(1.5);
+  rHungers=rHungers.filter(h=>!h.dying);
+  if(b.hp<=5&&b.phase===1){b.phase=2;}
+  powerups.forEach(p=>{if(!p.collected)p.y+=1.5;});
+  updatePowerups(rp.x,rp.y,true);
 }
 
 // ── RUNNER DRAW ─────────────────────────────────────────────────────────────
@@ -452,6 +471,92 @@ function drawRunnerTouchControls(){
   ctx.restore();
 }
 
+// ── POWER-UPS ──────────────────────────────────────────────────────────────
+// types: 'heart'=extra HP, 'shield'=5s invincibility, 'fist'=8s mega punch
+const PU_COLORS={heart:'#FF2255',shield:'#00DDFF',fist:'#FFD700'};
+const PU_LABELS={heart:'♥+1',shield:'SHIELD',fist:'FIST'};
+
+function spawnPowerup(x,y){
+  const types=['heart','shield','fist'];
+  const type=types[Math.floor(Math.random()*3)];
+  powerups.push({x,y,type,vx:(Math.random()-.5)*1.5,vy:(Math.random()-.5)*1.5,
+    rot:Math.random()*Math.PI*2,pulse:0,collected:false});
+}
+
+function updatePowerups(px,py,isRunner){
+  powerups.forEach(p=>{
+    if(p.collected)return;
+    p.pulse+=0.1;p.rot+=0.04;
+    if(!isRunner){p.x+=p.vx;p.y+=p.vy;}
+    else{p.y+=rSpeed;}
+    if(Math.hypot(px-p.x,py-p.y)<32){
+      p.collected=true;
+      spawnParticles(p.x,p.y,PU_COLORS[p.type],12);
+      applyPowerup(p.type,isRunner);
+    }
+  });
+  powerups=powerups.filter(p=>!p.collected&&p.x>-20&&p.x<W+20&&p.y>-20&&p.y<H+20);
+}
+
+function applyPowerup(type,isRunner){
+  if(type==='heart'){
+    if(isRunner){if(rHP<3)rHP++;}
+    else{if(player.health<player.maxHealth)player.health++;}
+    tone(880,0.15,'sine',0.3);setTimeout(()=>tone(1320,0.2,'sine',0.3),120);
+  }else if(type==='shield'){
+    puInvTimer=300; // 5 seconds @60fps
+    if(isRunner){rInv=true;rInvT=Math.max(rInvT,300);}
+    else{player.invincible=true;player.iTimer=Math.max(player.iTimer||0,300);}
+    tone(440,0.1,'sine',0.25);setTimeout(()=>tone(660,0.1,'sine',0.25),80);
+    setTimeout(()=>tone(880,0.2,'sine',0.3),160);
+  }else if(type==='fist'){
+    puFistTimer=480; // 8 seconds @60fps
+    tone(200,0.05,'square',0.3);setTimeout(()=>tone(300,0.15,'square',0.3),60);
+    setTimeout(()=>tone(150,0.2,'sawtooth',0.3),120);
+  }
+}
+
+function drawPowerup(p){
+  if(p.collected)return;
+  const sc=1+Math.sin(p.pulse)*0.12;
+  ctx.save();ctx.translate(p.x,p.y);ctx.scale(sc,sc);
+  // Glow
+  ctx.shadowColor=PU_COLORS[p.type];ctx.shadowBlur=18;
+  // Rotating ring
+  ctx.strokeStyle=PU_COLORS[p.type];ctx.lineWidth=2.5;
+  ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.stroke();
+  ctx.rotate(p.rot);
+  // Star shape body
+  ctx.fillStyle=PU_COLORS[p.type];
+  ctx.beginPath();
+  for(let i=0;i<8;i++){
+    const a=i*Math.PI/4,r=i%2===0?14:8;
+    i===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+  }
+  ctx.closePath();ctx.fill();
+  ctx.shadowBlur=0;
+  // Label
+  ctx.rotate(-p.rot);
+  ctx.fillStyle='#FFF';ctx.font='bold 9px Arial';ctx.textAlign='center';
+  ctx.fillText(PU_LABELS[p.type],0,3);
+  ctx.restore();
+}
+
+function drawPuHUD(){
+  if(puFistTimer>0){
+    ctx.fillStyle='#FFD700';ctx.font='bold 13px Arial';ctx.textAlign='left';
+    ctx.fillText(`MEGA FIST: ${Math.ceil(puFistTimer/60)}s`,W-130,46);
+    ctx.fillStyle='rgba(255,215,0,0.25)';rrect(W-132,50,124,8,4);ctx.fill();
+    ctx.fillStyle='#FFD700';rrect(W-132,50,124*(puFistTimer/480),8,4);ctx.fill();
+  }
+  if(puInvTimer>0){
+    ctx.fillStyle='#00DDFF';ctx.font='bold 13px Arial';ctx.textAlign='left';
+    ctx.fillText(`SHIELD: ${Math.ceil(puInvTimer/60)}s`,W-130,70);
+    ctx.fillStyle='rgba(0,220,255,0.25)';rrect(W-132,74,124,8,4);ctx.fill();
+    ctx.fillStyle='#00DDFF';rrect(W-132,74,124*(puInvTimer/300),8,4);ctx.fill();
+  }
+}
+
 // ── UPDATE ─────────────────────────────────────────────────────────────────
 function updatePlayer(){
   const p=player;
@@ -493,14 +598,19 @@ function updatePlayer(){
   touch.punch.justPressed=false;
   if(p.punchTimer>0&&--p.punchTimer===0)p.punching=false;
   if(p.invincible&&--p.iTimer<=0)p.invincible=false;
+  if(puInvTimer>0){puInvTimer--;p.invincible=true;}
+  if(puFistTimer>0)puFistTimer--;
 }
 
 function checkPunch(){
   const p=player;
-  const px=p.x+Math.cos(p.angle)*44,py=p.y+Math.sin(p.angle)*44;
+  const reach=puFistTimer>0?68:44;
+  const radius=puFistTimer>0?80:52;
+  const px=p.x+Math.cos(p.angle)*reach,py=p.y+Math.sin(p.angle)*reach;
+  if(puFistTimer>0)spawnParticles(px,py,'#FFD700',5);
   hungers.forEach(h=>{
     if(h.dying||h.flying)return;
-    if(Math.hypot(px-h.x,py-h.y)<52){
+    if(Math.hypot(px-h.x,py-h.y)<radius){
       if(state===S.BOSS&&boss){
         h.flying=true;h.stunned=false;
         const bd=Math.hypot(boss.x-h.x,boss.y-h.y)||1;
@@ -522,12 +632,14 @@ function updateCereals(){
     if(Math.hypot(player.x-c.x,player.y-c.y)<28){
       c.collected=true;player.cereals++;
       sfx.collect();spawnParticles(c.x,c.y,c.color,14,true);
+      if(Math.random()<0.3)spawnPowerup(c.x,c.y); // 30% chance powerup on collect
       if(player.cereals>=CEREAL_TOTAL){
         state=S.BOSS_INTRO;introTimer=150;
         hungers=[];lasers=[];
       }
     }
   });
+  updatePowerups(player.x,player.y,false);
 }
 
 function updateHungers(){
@@ -1407,7 +1519,8 @@ function loop(){
     case S.PLAYING:
       drawBg();
       updatePlayer();updateCereals();updateHungers();updateParticles();
-      cereals.forEach(drawCereal);drawParticles();hungers.forEach(drawHunger);drawPlayer();drawHUD();
+      cereals.forEach(drawCereal);powerups.forEach(drawPowerup);
+      drawParticles();hungers.forEach(drawHunger);drawPlayer();drawHUD();drawPuHUD();
       drawTouchControls();
       break;
     case S.BOSS_INTRO:
@@ -1421,16 +1534,20 @@ function loop(){
     case S.BOSS:
       drawBossBg();
       updatePlayer();updateHungers();updateBoss();updateLasers();updateParticles();
-      drawParticles();drawLasers();hungers.forEach(drawHunger);drawBoss();drawPlayer();drawHUD();
+      updatePowerups(player.x,player.y,false);
+      drawParticles();drawLasers();powerups.forEach(drawPowerup);
+      hungers.forEach(drawHunger);drawBoss();drawPlayer();drawHUD();drawPuHUD();
       drawTouchControls();
       break;
     // ── RUNNER STATES ────────────────────────────────────────────────────────
     case S.RUNNER:{
       drawRunnerBg();updateRunner();
+      const _rp=player;player=rp;
       rCereals.forEach(c=>{if(!c.collected)drawCereal(c);});
-      drawParticles();rHungers.forEach(drawHunger);
-      const _sp=player;player=rp;drawPlayer();player=_sp;
-      drawRunnerHUD();drawRunnerTouchControls();
+      powerups.forEach(drawPowerup);
+      drawParticles();rHungers.forEach(drawHunger);drawPlayer();
+      player=_rp;
+      drawRunnerHUD();drawPuHUD();drawRunnerTouchControls();
       break;}
     case S.RUNNER_BOSS_INTRO:
       drawRunnerBg();updateParticles();drawParticles();
@@ -1444,10 +1561,13 @@ function loop(){
     case S.RUNNER_BOSS:{
       drawRunnerBg();updateRunnerBoss();
       drawRunnerLasers();drawParticles();
+      const _rp2=player;player=rp;
+      powerups.forEach(drawPowerup);
       rHungers.forEach(drawHunger);
       const _sb=boss;boss=rBoss;drawBoss();boss=_sb;
-      const _sp2=player;player=rp;drawPlayer();player=_sp2;
-      drawRunnerHUD();drawRunnerTouchControls();
+      drawPlayer();
+      player=_rp2;
+      drawRunnerHUD();drawPuHUD();drawRunnerTouchControls();
       break;}
     case S.VICTORY:
       updateParticles();drawParticles();drawVictory();
