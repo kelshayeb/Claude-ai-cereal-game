@@ -439,7 +439,8 @@ function drawRunnerLasers(){
 function drawRunnerHUD(){
   ctx.textAlign='left';
   // Hearts
-  for(let i=0;i<3;i++){
+  const maxShow=Math.max(3,rHP);
+  for(let i=0;i<maxShow;i++){
     ctx.font='22px Arial';ctx.globalAlpha=i<rHP?1:0.25;
     ctx.fillStyle='#FF3355';ctx.fillText('♥',14+i*28,26);
   }
@@ -519,8 +520,14 @@ function updatePowerups(px,py,isRunner){
 
 function applyPowerup(type,isRunner){
   if(type==='heart'){
-    if(isRunner){if(rHP<3)rHP++;}
-    else{if(player.health<player.maxHealth)player.health++;}
+    if(isRunner){
+      if(rHP<5)rHP++;
+    }else{
+      if(player.health<5){
+        player.health++;
+        if(player.health>player.maxHealth)player.maxHealth=player.health;
+      }
+    }
     tone(880,0.15,'sine',0.3);setTimeout(()=>tone(1320,0.2,'sine',0.3),120);
   }else if(type==='shield'){
     puInvTimer=300; // 5 seconds @60fps
